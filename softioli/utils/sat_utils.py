@@ -408,7 +408,7 @@ def generate_abi_hourly_nc_file_from_15min_hdf_files(dir_path_list, remove_temp_
                     ds_list.append(b_temp_w_coords_ds)
                     hdf_names.append(h_file.name)
 
-            h_abi_ds_sat = xr.merge(ds_list, combine_attrs="drop_conflicts")
+            h_abi_ds_sat = xr.concat(ds_list, dim='time', coords='minimal', compat='override', combine_attrs="drop_conflicts")
             h_abi_ds_sat.attrs[cts.SAT_VERSION_ATTRS_NAME] = sat_version
             h_abi_ds_sat.attrs['raw_hdf_files'] = hdf_names
             h_abi_ds_sat.to_netcdf(

@@ -6,6 +6,8 @@ import xarray as xr
 import warnings
 import flox.xarray
 
+import time
+
 from utils.sat_utils import generate_abi_hourly_nc_file_from_15min_hdf_files
 from utils import generate_sat_hourly_file_path, generate_sat_filename_pattern, \
     get_PathParser
@@ -225,13 +227,21 @@ def generate_cloud_temp_sat_hourly_regrid_file(pre_regrid_file_url, sat_name, gr
         n_lat, n_lon = len(latitude), len(longitude)
 
         with xr.open_dataset(pre_regrid_file_url) as pre_regrid_ds:
+            #################################################
+            t_open = time.time()
+            #################################################
+            
+            
             lat_vals = pre_regrid_ds['latitude'].values
             lon_vals = pre_regrid_ds['longitude'].values
 
             # nearest target-grid value via direct arithmetic, clamped to the domain edges --
             # equivalent to the old .sel(..., method='nearest')
-            lat_idx = np.clip(np.round((lat_vals - lat_min) / grid_res).astype(np.int64), 0, n_lat - 1)
-            lon_idx = np.clip(np.round((lon_vals - lon_min) / grid_res).astype(np.int64), 0, n_lon - 1)
+            # cast nan values to 0 to avoid runtime warning (nan values still put to nan afterwards with the drop step)
+            lat_idx = np.round(np.nan_to_num(lat_vals - lat_min, nan=0.0) / grid_res).astype(np.int64)
+            lat_idx = np.clip(lat_idx, 0, n_lat - 1)
+            lon_idx = np.round(np.nan_to_num(lon_vals - lon_min, nan=0.0) / grid_res).astype(np.int64)
+            lon_idx = np.clip(lon_idx, 0, n_lon - 1)
             lat_snapped = latitude[lat_idx]
             lon_snapped = longitude[lon_idx]
 
@@ -242,6 +252,10 @@ def generate_cloud_temp_sat_hourly_regrid_file(pre_regrid_file_url, sat_name, gr
 
             lat_snapped_da = xr.DataArray(lat_snapped, dims=pre_regrid_ds['latitude'].dims, name='latitude')
             lon_snapped_da = xr.DataArray(lon_snapped, dims=pre_regrid_ds['longitude'].dims, name='longitude')
+
+            ############################################
+            t_before_reduce = time.time()
+            ############################################
 
             # mean brightness temperature per (time, latitude, longitude) grid cell.
             # expected_groups pins the full target grid as exact labels (isbin=False, the
@@ -254,6 +268,10 @@ def generate_cloud_temp_sat_hourly_regrid_file(pre_regrid_file_url, sat_name, gr
                 expected_groups=(None, latitude, longitude),
                 fill_value=np.nan,
             )
+
+            #############################################
+            t_after_reduce = time.time()
+            #############################################
 
             # only keep min value for the hour, ignoring cells with no data in a given 15-min slice
             with warnings.catch_warnings():
@@ -277,6 +295,11 @@ def generate_cloud_temp_sat_hourly_regrid_file(pre_regrid_file_url, sat_name, gr
                 encoding={"time": {"dtype": 'float64', 'units': 'nanoseconds since 1970-01-01'}}
             )
             print(f"Created netcdf file {result_file_path}")
+            ########################################################
+            t_after_write = time.time()
+            print(f"{pre_regrid_file_url.name}: open+snap={t_before_reduce-t_open:.1f}s reduce={t_after_reduce-t_before_reduce:.1f}s write={t_after_write-t_after_reduce:.1f}s", flush=True)
+            ########################################################
+
 
     else:  # file already exists so no need to create it again
         print(f"{result_file_path} already exists")
