@@ -15,7 +15,8 @@ import utils
 from utils import constants as cts
 import sat_regrid
 from utils.sat_utils import generate_sat_dir_path, get_list_of_dates_from_list_of_sat_path, \
-    generate_sat_dir_list_between_start_end_date, get_data_files_list_between_start_end_date, get_PathParser, merge_GOES_sat_data_with_overlap
+    generate_sat_dir_list_between_start_end_date, get_data_files_list_between_start_end_date, get_PathParser, \
+    merge_GOES_sat_data_with_overlap, get_lightning_vars_to_keep
 from utils.fp_utils import get_fpout_nc_file_path_from_fp_dir, get_fp_out_ds_xdays
 
 
@@ -24,7 +25,8 @@ from utils.fp_utils import get_fpout_nc_file_path_from_fp_dir, get_fp_out_ds_xda
 
 # TODO: suppr dry_run une fois que les tests sont finis
 # TODO: pour avoir un sat_ds avec PLUSIEURS sources sat --> sat_name = list, for loop et ensuite je merge tout ?
-def get_satellite_ds(start_date, end_date, sat_name, grid_resolution=cts.GRID_RESOLUTION, rm_pre_regrid_file=False,
+def get_satellite_ds(start_date, end_date, sat_name, grid_resolution=cts.GRID_RESOLUTION,
+                     keep_lightning_stats=False, rm_pre_regrid_file=False,
                      grid_res_str=cts.GRID_RESOLUTION_STR, overwrite=False, dry_run=False, print_debug=False):
     """
     Returns dataset with regridded satellite data between start and end date
@@ -32,6 +34,12 @@ def get_satellite_ds(start_date, end_date, sat_name, grid_resolution=cts.GRID_RE
     @param end_date:
     @param sat_name:
     @param grid_resolution:
+    @param keep_lightning_stats: <bool>, <list<str>> or None. Only used if sat_name is a lightning satellite
+        (GOES_GLM or MTG_LI). Indicates which flash energy/area statistics variables (see cts.FLASH_STATS_VARS)
+        to keep in the returned dataset, in addition to 'flash_count'.
+        - None or False (default): keep only 'flash_count'
+        - True or []: keep 'flash_count' + every flash stats variable present in the regridded files
+        - <list<str>>: keep 'flash_count' + only the requested variable names (e.g. ['flash_energy_mean', 'flash_area_p95'])
     @param grid_res_str:
     @param overwrite:
     @param dry_run:
@@ -107,15 +115,17 @@ def get_satellite_ds(start_date, end_date, sat_name, grid_resolution=cts.GRID_RE
         # if several sat data files for the same hour --> preprocess them before merging
         if merge_sats_for_same_hour:
             sat_ds = merge_GOES_sat_data_with_overlap(regrid_daily_file_list=regrid_daily_file_list,
-                                                      sat_name=sat_name, PathParser=PathParser, print_debug=print_debug)
+                                                      sat_name=sat_name, PathParser=PathParser,
+                                                      keep_lightning_stats=keep_lightning_stats, print_debug=print_debug)
         else:
             # create a dataset merging all the regrid hourly files
             # engine h5netcdf because default engine does not work with parallel=True
             sat_ds = xr.open_mfdataset(regrid_daily_file_list, parallel=True, engine='h5netcdf',
                                        combine='nested', concat_dim='time', combine_attrs='drop_conflicts')
-            # if lightning ds only keep flash_count to prevent computations from being too long (hist take up too much place)
+            # if lightning ds only keep flash_count (+ requested stats) to prevent computations from being
+            # too long (histograms take up too much place, never kept -- see get_lightning_vars_to_keep)
             if sat_name == cts.GOES_SATELLITE_GLM or sat_name == cts.MTG_LI:
-                sat_ds = sat_ds[['flash_count']]
+                sat_ds = sat_ds[get_lightning_vars_to_keep(sat_ds.data_vars, keep_lightning_stats, print_debug=print_debug)]
 
         return sat_ds
 
@@ -171,7 +181,8 @@ def get_weighted_fp_sat_ds(fp_ds, lightning_sat_ds, chunks='auto',
 
 
 def fpout_sat_comparison(fp_path, lightning_sat_name, bTemp_sat_name, flights_id_list, file_list=False,
-                         no_cloud_sat=False, chunks='auto', print_debug=False, dry_run=False, overwrite_weighted_ds=False,
+                         no_cloud_sat=False, chunks='auto', keep_lightning_stats=False,
+                         print_debug=False, dry_run=False, overwrite_weighted_ds=False,
                          max_chunk_size=1e8, assign_releases_position_coords=False, grid_resolution=cts.GRID_RESOLUTION,
                          grid_res_str=cts.GRID_RESOLUTION_STR, softioli_output_dirpath=None, result_dirname='flexpart_lightning_comparison',
                          result_ds_name='', overwrite_sat_files=False, rm_pre_regrid_abi_file=False,
@@ -201,7 +212,7 @@ def fpout_sat_comparison(fp_path, lightning_sat_name, bTemp_sat_name, flights_id
                 no_glm = False
                 try:
                     lightning_sat_ds = get_satellite_ds(start_date=start_date, end_date=end_date,
-                                                        sat_name=lightning_sat_name,
+                                                        sat_name=lightning_sat_name, keep_lightning_stats=keep_lightning_stats,
                                                         grid_resolution=grid_resolution, print_debug=print_debug,
                                                         grid_res_str=grid_res_str, dry_run=dry_run,
                                                         overwrite=overwrite_sat_files,
@@ -315,6 +326,12 @@ if __name__ == '__main__':
     sat_group = parser.add_argument_group('Satellite parameters')
     sat_group.add_argument('--lightning-sat-name', default=cts.GOES_SATELLITE_GLM,
                            help=f'Lightning satellite name (default={cts.GOES_SATELLITE_GLM})')
+    sat_group.add_argument('--keep-lightning-stats', nargs='*', default=None, metavar='STAT_VAR',
+                           choices=cts.FLASH_STATS_VARS, action='store',
+                           help='Indicates if lightning flash energy/area statistics variables should be kept '
+                                'in the final dataset, in addition to flash_count. Pass with no value to keep '
+                                f'all of them, or specific variable name(s) to keep only a subset. '
+                                f'Available: {", ".join(cts.FLASH_STATS_VARS)} (default: none kept)')
     sat_group.add_argument('--no-cloud-sat', action='store_true', help=f'Indicates if cloud sat data should be ignored')
     sat_group.add_argument('--cloud-sat-name', default=cts.GOES_SATELLITE_ABI,
                            help=f'Cloud brightness temperature satellite name (default={cts.GOES_SATELLITE_ABI})')
@@ -401,7 +418,7 @@ if __name__ == '__main__':
                                          bTemp_sat_name=args.cloud_sat_name, no_cloud_sat=args.no_cloud_sat, file_list=True,
                                          chunks='auto', max_chunk_size=1e8, assign_releases_position_coords=False,
                                          grid_resolution=args.grid_res, grid_res_str=args.grid_res_str,
-                                         print_debug=args.print_debug,
+                                         print_debug=args.print_debug, keep_lightning_stats=args.keep_lightning_stats,
                                          softioli_output_dirpath=args.softioli_output_dir, result_dirname=args.result_dirname,
                                          result_ds_name=args.result_ds_name,
                                          overwrite_weighted_ds=args.overwrite_weighted_ds,

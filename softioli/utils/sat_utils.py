@@ -13,6 +13,41 @@ from .ABIPathParser import ABIPathParser
 from .MTGLIPathParser import MTGLIPathParser
 
 
+def get_lightning_vars_to_keep(available_vars, keep_lightning_stats=None, print_debug=False):
+    """
+    Determine which data variables to keep from a regridded lightning satellite dataset,
+    'flash_count' is always kept, flash energy/area stats variables (see cts.FLASH_STATS_VARS)
+    are only kept as requested (histograms are never kept, they take up too much space).
+    @param available_vars: <iterable<str>> data variable names present in the dataset
+    @param keep_lightning_stats: <bool>, <list<str>> or None
+        - None or False (default): keep only 'flash_count'
+        - True or []: keep 'flash_count' + every flash stats variable present in available_vars
+        - <list<str>>: keep 'flash_count' + only the requested variable names that are present
+    @param print_debug: <bool>
+    @return: <list<str>>
+    """
+    vars_to_keep = ['flash_count']
+    if keep_lightning_stats is None or keep_lightning_stats is False:
+        return vars_to_keep
+
+    if keep_lightning_stats is True or list(keep_lightning_stats) == []:
+        requested = list(cts.FLASH_STATS_VARS)
+    else:
+        requested = list(keep_lightning_stats)
+        unknown = set(requested) - set(cts.FLASH_STATS_VARS)
+        if unknown:
+            raise ValueError(f'Unknown lightning stats variable(s): {sorted(unknown)}. '
+                             f'Available: {sorted(cts.FLASH_STATS_VARS)}')
+
+    available_vars = set(available_vars)
+    missing = [v for v in requested if v not in available_vars]
+    if missing and print_debug:
+        print(f'<!> Requested lightning stats variables not present in this dataset '
+             f'(not generated at regrid time?): {missing}')
+    vars_to_keep += [v for v in requested if v in available_vars]
+    return vars_to_keep
+
+
 def get_PathParser(sat_name):
     if sat_name == cts.GOES_SATELLITE_GLM:
         return GLMPathParser
@@ -275,7 +310,7 @@ def get_abi_coords_file(sat_version, file_version, print_debug=False):
 
 
 
-def merge_GOES_sat_data_with_overlap(regrid_daily_file_list, sat_name, PathParser, print_debug=False):
+def merge_GOES_sat_data_with_overlap(regrid_daily_file_list, sat_name, PathParser, keep_lightning_stats=None, print_debug=False):
     sat_versions = set()
     # divide files in 3 categories: files without overlap, GOES-E files w/ overlap, GOES-W files w/ overlap
     files_without_overlap = []
@@ -305,15 +340,15 @@ def merge_GOES_sat_data_with_overlap(regrid_daily_file_list, sat_name, PathParse
 
     # functions to pre-process GOES-E and GOES-W data (cut at 100°W)
     def pre_process_GOES_EAST_data(ds):
-        # if lightning sat, only keep flash_count variable to lighten computation time
+        # if lightning sat, only keep flash_count (+ requested stats) variables to lighten computation time
         if sat_name == cts.GOES_SATELLITE_GLM:
-            ds = ds[['flash_count']]
+            ds = ds[get_lightning_vars_to_keep(ds.data_vars, keep_lightning_stats, print_debug=print_debug)]
         return ds.where(ds.longitude >= -100, drop=True)
 
     def pre_process_GOES_WEST_data(ds):
-        # if lightning sat, only keep flash_count variable to lighten computation time
+        # if lightning sat, only keep flash_count (+ requested stats) variables to lighten computation time
         if sat_name == cts.GOES_SATELLITE_GLM:
-            ds = ds[['flash_count']]
+            ds = ds[get_lightning_vars_to_keep(ds.data_vars, keep_lightning_stats, print_debug=print_debug)]
         return ds.where(ds.longitude < -100, drop=True)
 
     datasets_to_merge = []
@@ -323,7 +358,7 @@ def merge_GOES_sat_data_with_overlap(regrid_daily_file_list, sat_name, PathParse
         merged_dataset = xr.open_mfdataset(files_without_overlap, parallel=True, engine='h5netcdf',
                               combine='nested', concat_dim='time', combine_attrs='drop_conflicts')
         if sat_name == cts.GOES_SATELLITE_GLM:
-            merged_dataset = merged_dataset[['flash_count']]
+            merged_dataset = merged_dataset[get_lightning_vars_to_keep(merged_dataset.data_vars, keep_lightning_stats, print_debug=print_debug)]
         datasets_to_merge.append(merged_dataset)
     if GOES_EAST_files_with_overlap:
         datasets_to_merge.append(

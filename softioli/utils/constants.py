@@ -364,6 +364,13 @@ f_ar_km2_min_bin = 1.5 # log
 f_ar_km2_max_bin = 4.5
 f_ar_km2_hist_step = 0.1
 
+# stats parameters (must match xr_pd_utils.stats_using_pandas default percentiles + res_var_prefix
+# used in sat_regrid.generate_lightning_sat_hourly_regrid_file, i.e. 'flash_energy'/'flash_area')
+FLASH_STATS_PERCENTILES = (5, 25, 50, 75, 95, 99)
+FLASH_STATS_PREFIXES = ('flash_energy', 'flash_area')
+FLASH_STATS_SUFFIXES = ('mean', 'std') + tuple(f'p{p}' for p in FLASH_STATS_PERCENTILES)
+FLASH_STATS_VARS = tuple(f'{prefix}_{suffix}' for prefix in FLASH_STATS_PREFIXES for suffix in FLASH_STATS_SUFFIXES)
+
 # TODO: complete with other satellite data + add dataset_name (mais là pas OK parce que nom fichier 20sec, PAS hourly)
 SAT_SETTINGS = {
     GOES_SATELLITE_GLM: {
