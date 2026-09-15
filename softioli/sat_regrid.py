@@ -24,6 +24,41 @@ def generate_flash_count_ds(_df, data_var_name, res_var_name, grid_res):
     return count_ds
 
 
+def get_glm_fov_mask(latitude, longitude, sat_version):
+    """
+    Boolean mask (dims: latitude, longitude) of grid cells within the GLM instrument's
+    field of view, so that 'flash_count' can be set to 0 (observed, no flash) inside it
+    and left as NaN (not observed) outside it, instead of NaN everywhere a flash wasn't
+    recorded. See cts.GLM_FOV_BOUNDS for the source of the bounds.
+    :param latitude: <xarray.DataArray> 1D, degrees north
+    :param longitude: <xarray.DataArray> 1D, degrees east
+    :param sat_version: <str> e.g. 'GOES16', 'G17', ...
+    :return: <xarray.DataArray> dims (latitude, longitude)
+    """
+    if sat_version in cts.GOES_EAST_SAT_VERSION:
+        fov = cts.GLM_FOV_BOUNDS['GOES_EAST']
+    elif sat_version in cts.GOES_WEST_SAT_VERSION:
+        fov = cts.GLM_FOV_BOUNDS['GOES_WEST']
+    else:
+        raise ValueError(f'Unsupported GLM satellite version for field of view mask: {sat_version}')
+
+    def wrapped_offset(lon_val, ref_lon):
+        # signed angular offset from ref_lon, wrapped to [-180, 180) to handle FOVs that cross the antimeridian
+        return ((lon_val - ref_lon + 180) % 360) - 180
+
+    sub_lon = fov['sub_lon']
+    lon_west_offset = wrapped_offset(fov['lon_west'], sub_lon)  # negative
+    lon_east_offset = wrapped_offset(fov['lon_east'], sub_lon)  # positive
+
+    dlat = latitude  # sub-satellite latitude is always 0.0
+    dlon = wrapped_offset(longitude, sub_lon)
+    lon_half_width = xr.where(dlon >= 0, lon_east_offset, -lon_west_offset)
+
+    # ellipse inscribed in the published (asymmetric) bounding box, approximating the
+    # PUG's "rounded corners" -- not an exact reconstruction of the true instrument FOV
+    return (dlat / cts.GLM_FOV_LAT_HALF_WIDTH) ** 2 + (dlon / lon_half_width) ** 2 <= 1
+
+
 # TODO: gérer quand goes w et goes e + refacto
 def generate_lightning_sat_hourly_regrid_file(pre_regrid_file_url, sat_name,
                                               grid_res, generate_hists, generate_stats,
@@ -186,6 +221,14 @@ def generate_lightning_sat_hourly_regrid_file(pre_regrid_file_url, sat_name,
             ds_to_merge_list.append(target_ds)
             target_ds = xr.merge(ds_to_merge_list,
                                  combine_attrs='no_conflicts')
+            if sat_name == cts.GOES_SATELLITE_GLM and 'flash_count' in target_ds:
+                # count_ds only has entries for cells with >=1 flash, so after the merge above
+                # 'flash_count' is NaN both for observed-but-flashless cells AND cells outside
+                # the GLM instrument's field of view -- distinguish the two: 0 inside the FOV
+                # (observed, no flash), NaN outside it (not observed)
+                fov_mask = get_glm_fov_mask(target_ds['latitude'], target_ds['longitude'],
+                                            sat_version=pre_regrid_path_parsed.satellite_version)
+                target_ds['flash_count'] = target_ds['flash_count'].fillna(0).where(fov_mask)
         # add pre-regrid file date to regrid date + add regrid file creation date attr
         target_ds = target_ds.expand_dims(
             {'time': [pre_regrid_path_parsed.get_start_date_pdTimestamp(ignore_missing_start_hour=False)]})

@@ -276,6 +276,17 @@ SAT_VERSION_ATTRS_NAME = 'satellite_version'
 GOES_WEST_SAT_VERSION = ['GOES17', 'G17', 'GOES18', 'G18']
 GOES_EAST_SAT_VERSION = ['GOES16', 'G16', 'GOES19', 'G19']
 
+# GLM instrument field of view (rounded-corner bounding box), from:
+# GOES-R Product Definition and User's Guide (PUG), Volume 5: Level 2+ Products,
+# Table 5.26.1-1 "Lightning Detection Product Field of View Center and Extents", p.588.
+# Note (from the PUG): the field of view is NOT a rectangle in lat/lon space, the corners
+# are rounded -- these bounds are used as an ellipse inscribed in the published box.
+GLM_FOV_LAT_HALF_WIDTH = 66.56  # degrees, symmetric N/S, same for GOES-East and GOES-West
+GLM_FOV_BOUNDS = {
+    'GOES_EAST': {'sub_lon': -75.2, 'lon_west': -141.56, 'lon_east': -8.44},
+    'GOES_WEST': {'sub_lon': -137.0, 'lon_west': -203.56, 'lon_east': -70.44},
+}
+
 GOES_SATELLITE_GLM = 'GOES_GLM'
 GLM_ROOT_DIR = pathlib.Path('/o3p/patj/glm')
 REGRID_GLM_DIRNAME = 'regrid_hourly_glm'

@@ -130,7 +130,8 @@ def get_weighted_flash_count(spec001_mr_da, flash_count_da):
     :param flash_count_da:
     :return:
     """
-    return (spec001_mr_da * flash_count_da).sum(['latitude', 'longitude']) / 3600
+    spec001_mr_where_satellite_da =  spec001_mr_da.where(flash_count_da.notnull())
+    return (spec001_mr_where_satellite_da * flash_count_da).sum(['latitude', 'longitude']) / spec001_mr_where_satellite_da.sum(['latitude', 'longitude'])
 
 
 def get_weighted_fp_sat_ds(fp_ds, lightning_sat_ds, chunks='auto',
